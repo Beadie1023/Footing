@@ -1373,14 +1373,14 @@ function renderTraditionsHTML(name, dobStr, lifePathNum, py){
     <div class="twin" style="margin-top:4px;">
       <div class="cell">
         <h3><span class="num">${pyth}</span>Western (Pythagorean)</h3>
-        <p>The same birth name, run through the letter values most Western numerologists use today. Any difference from your Chaldean name number comes entirely from the letter table, not from you.</p>
+        <p>The same birth name, run through the letter values most Western numerologists use today. In this tradition, a ${pyth} points to ${numberData[pyth].strength} — the same archetype language this whole app uses, just reached through a different letter table than Chaldean's.</p>
       </div>
       <div class="cell">
         <h3><span class="num">${heb}</span>Hebrew-style gematria</h3>
         <p>Raw total ${hebRaw}, reduced to a single digit. ${hebrewMeaning[heb]}</p>
       </div>
     </div>
-    <p class="subhead" style="margin-top:16px;">Gematria comes from a Jewish mystical tradition where every Hebrew letter doubles as a number — so a name or word carries a numeric value alongside its meaning, and two words that share a value are traditionally read as spiritually linked. This version is an English-letter approximation, since real gematria works from a name's actual Hebrew spelling — treat it as a loose echo rather than a precise reading.</p>
+    <p class="subhead" style="margin-top:16px;">The Pythagorean system is named for the Greek mathematician and mystic who first proposed that numbers underlie the structure of reality — it's the version most common in the West today, cycling every letter through 1–9 rather than Chaldean's 1–8 table. Gematria, separately, comes from a Jewish mystical tradition where every Hebrew letter doubles as a number — so a name or word carries a numeric value alongside its meaning, and two words that share a value are traditionally read as spiritually linked. This version is an English-letter approximation, since real gematria works from a name's actual Hebrew spelling — treat it as a loose echo rather than a precise reading.</p>
 
     <h3 style="margin-top:22px;">Your birth date's digits, through a Chinese lens</h3>
     <p class="subhead">Chinese numerology cares less about reducing digits down and more about which ones show up at all, based on how they sound when spoken.</p>
@@ -1559,6 +1559,44 @@ function renderLetterologyHTML(fullName){
       </div>
     </div>
     <p class="care-note">Cornerstone, Capstone, Soul Urge, and Personality are standard numerology terms, not something invented for this app — practitioners have used this exact four-way split for a long time. Vowels are A, E, I, O and U; Y is counted as a consonant. Where the Soul Urge and Personality numbers pull in different directions, that's usually the tension people feel between who they are and how they're read.</p>
+  `;
+}
+
+function renderWordLookupResult(word, lifePathNum){
+  const L = letterology(word);
+  if(!L.first){
+    return `<p style="color:var(--muted);">Type in a word, brand, or name with actual letters in it.</p>`;
+  }
+  const raw = nameToNumber(word);
+  const num = reduceNum(raw, true);
+  const vNum = reduceNum(L.vowelSum, true);
+  const cNum = reduceNum(L.consSum, true);
+  const h = harmonyText(lifePathNum, raw);
+  const rows = L.parts.map(p=>{
+    const chips = p.letters.map(l=>`<span class="lchip ${l.isVowel?'vowel':''}">${l.ch}<small>${l.v}</small></span>`).join('');
+    return `<div class="letter-word"><div class="letter-word-label">${titleCase(p.word)}</div><div class="letter-row">${chips}</div></div>`;
+  }).join('');
+  return `
+    <div class="letter-words">${rows}</div>
+    <div class="twin" style="margin-top:16px;">
+      <div class="cell">
+        <h3><span class="num">${num}</span>Overall number</h3>
+        <p>${numberData[num].strength}. Against your own life path: ${h.tone}. ${h.text}</p>
+      </div>
+      <div class="cell">
+        <h3><span class="num">${L.first.ch}</span>Cornerstone</h3>
+        <p>The opening letter — ${numberData[L.first.v].strength}.</p>
+      </div>
+      <div class="cell">
+        <h3><span class="num">${L.last.ch}</span>Capstone</h3>
+        <p>The closing letter — ${numberData[L.last.v].strength}.</p>
+      </div>
+      <div class="cell">
+        <h3><span class="num">${vNum}</span>Soul Urge</h3>
+        <p>From the vowels alone — ${numberData[vNum].strength}.</p>
+      </div>
+    </div>
+    <p style="margin-top:14px;"><b style="color:var(--paper);">Personality (consonants):</b> ${cNum} — ${numberData[cNum].strength}.</p>
   `;
 }
 
@@ -1857,6 +1895,14 @@ function renderReading(){
         <h2>Brand energy</h2>
         <p>If your surroundings could talk, here's the aesthetic they'd probably lean toward.</p>
         ${renderBrandHTML(lifePath)}
+
+        <h3 style="margin-top:24px;">Look up any word or brand</h3>
+        <p class="subhead">Run the same letterology lens — Cornerstone, Capstone, Soul Urge, and Personality — against anything. A product name, a company, a word you're weighing.</p>
+        <div class="tool-form">
+          <input type="text" id="wordSearchInput" placeholder="Any word, name, or brand">
+          <button class="ghost" id="wordSearchBtn" type="button">Look it up</button>
+        </div>
+        <div id="wordSearchResult" style="display:none; margin-top:18px;"></div>
       </div>
 
       <div class="panel">
@@ -1883,6 +1929,7 @@ function renderReading(){
   renderMoons();
   wireAltNameCheck(lifePath);
   wireCueCaseCheck();
+  wireWordSearch(lifePath);
   wireCompatCheck(lifePath);
   wireKuaCheck(profile.dob);
 }
@@ -1935,6 +1982,22 @@ function wireCueCaseCheck(){
     const rFinal = reduceNum(rRaw, true);
     result.innerHTML = `As styled, <b style="color:var(--amber);">${styled}</b> \u2014 Non-Reduced: <b style="color:var(--amber);">${nrFinal}/${nrRaw}</b>, Reduced: <b style="color:var(--amber);">${rFinal}/${rRaw}</b>.`;
     result.classList.add('show');
+  });
+}
+
+function wireWordSearch(lifePathNum){
+  const btn = document.getElementById('wordSearchBtn');
+  const input = document.getElementById('wordSearchInput');
+  const result = document.getElementById('wordSearchResult');
+  if(!btn) return;
+  btn.addEventListener('click', ()=>{
+    const word = input.value.trim();
+    if(!word) return;
+    result.innerHTML = renderWordLookupResult(word, lifePathNum);
+    result.style.display = 'block';
+  });
+  input.addEventListener('keydown', (e)=>{
+    if(e.key === 'Enter'){ e.preventDefault(); btn.click(); }
   });
 }
 
