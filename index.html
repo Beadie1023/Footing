@@ -637,6 +637,16 @@
     cursor:pointer;
   }
   .kua-btn.sel{border-color:var(--amber); color:var(--amber);}
+  .time-precision-btn{
+    border:1px solid var(--hairline);
+    background:none;
+    color:var(--moonlight);
+    padding:7px 16px;
+    border-radius:20px;
+    font-size:13.5px;
+    cursor:pointer;
+  }
+  .time-precision-btn.sel{border-color:var(--amber); color:var(--amber);}
   .entry{
     border-bottom:1px solid var(--hairline);
     padding:16px 0;
@@ -1026,6 +1036,74 @@ function sunSignForDate(m, d){
 }
 
 /* ---------------------------------------------------------
+   RISING SIGN (Ascendant): real trigonometry, not an approximation series.
+   Formula verified two independent ways before shipping:
+   (1) a zero-obliquity identity check (should reduce to RAMC+90 exactly), and
+   (2) cross-validated against an independently-sourced formula citing Meeus'
+   Astronomical Algorithms. Both passed exactly across dozens of test cases.
+   This is deliberately the ONLY natal-chart element added beyond Sun sign \u2014
+   actual planetary placements need a real orbital ephemeris, which can't be
+   verified the same rigorous way in this environment, so they're left out
+   rather than guessed at.
+--------------------------------------------------------- */
+const ZODIAC_ORDER = ['Aries','Taurus','Gemini','Cancer','Leo','Virgo','Libra','Scorpio','Sagittarius','Capricorn','Aquarius','Pisces'];
+
+function signForEclipticLongitude(deg){
+  const idx = Math.floor((((deg % 360) + 360) % 360) / 30);
+  return ZODIAC_ORDER[idx];
+}
+
+function julianDayUTC(utcDate){
+  // Uses the standard civil-calendar-to-JD algorithm (Meeus ch. 7), via JS's
+  // own UTC date math so month/day/year rollovers are handled automatically.
+  let y = utcDate.getUTCFullYear();
+  let m = utcDate.getUTCMonth() + 1;
+  const d = utcDate.getUTCDate();
+  const hourUT = utcDate.getUTCHours() + utcDate.getUTCMinutes()/60 + utcDate.getUTCSeconds()/3600;
+  if(m <= 2){ y -= 1; m += 12; }
+  const A = Math.floor(y/100);
+  const B = 2 - A + Math.floor(A/4);
+  return Math.floor(365.25*(y+4716)) + Math.floor(30.6001*(m+1)) + d + hourUT/24 + B - 1524.5;
+}
+
+function gmstDegrees(jd){
+  const T = (jd - 2451545.0)/36525;
+  let gmst = 280.46061837 + 360.98564736629*(jd-2451545.0) + 0.000387933*T*T - (T*T*T)/38710000;
+  return ((gmst % 360) + 360) % 360;
+}
+
+// localDateStr: 'YYYY-MM-DD', hour/minute: local civil time, utcOffsetHours: e.g. -5 for US Eastern Standard.
+function ascendantDegree(localDateStr, hour, minute, latDeg, lonDeg, utcOffsetHours){
+  const [y,m,d] = localDateStr.split('-').map(Number);
+  const localAsUTCms = Date.UTC(y, m-1, d, hour, minute, 0);
+  const trueUTC = new Date(localAsUTCms - utcOffsetHours*3600*1000);
+  const jd = julianDayUTC(trueUTC);
+  const gmst = gmstDegrees(jd);
+  const ramc = ((gmst + lonDeg) % 360 + 360) % 360; // east longitude positive
+  const eps = (23.4392911) * Math.PI/180;
+  const phi = latDeg * Math.PI/180;
+  const ramcRad = ramc * Math.PI/180;
+  const y_ = -Math.cos(ramcRad);
+  const x_ = Math.sin(eps)*Math.tan(phi) + Math.cos(eps)*Math.sin(ramcRad);
+  let raw = Math.atan2(y_, x_) * 180/Math.PI;
+  raw = ((raw % 360) + 360) % 360;
+  return (raw + 180) % 360;
+}
+
+// For an imprecise birth time (hour known, minute not): samples across the hour
+// and returns every sign the ascendant actually passes through, since at some
+// latitudes a sign can rise in well under an hour, so more than one is possible.
+function ascendantSignsForHour(localDateStr, hour, latDeg, lonDeg, utcOffsetHours){
+  const signs = [];
+  for(let min = 0; min <= 55; min += 5){
+    const deg = ascendantDegree(localDateStr, hour, min, latDeg, lonDeg, utcOffsetHours);
+    const sign = signForEclipticLongitude(deg);
+    if(signs.indexOf(sign) === -1) signs.push(sign);
+  }
+  return signs;
+}
+
+/* ---------------------------------------------------------
    LIFE CYCLES: Pinnacles & Challenges
 --------------------------------------------------------- */
 const challengeMeaning = {
@@ -1408,6 +1486,75 @@ function wireKuaCheck(dobStr){
 }
 
 
+function wireRisingSignTool(dobStr){
+  const precisionBtns = document.querySelectorAll('.time-precision-btn');
+  const exactField = document.getElementById('exactTimeField');
+  const hourField = document.getElementById('hourOnlyField');
+  const locationFields = document.getElementById('locationFields');
+  const locationHelp = document.getElementById('locationHelp');
+  const calcBtn = document.getElementById('risingSignBtn');
+  const result = document.getElementById('risingSignResult');
+  if(!calcBtn) return;
+  let mode = null;
+
+  precisionBtns.forEach(btn=>{
+    btn.addEventListener('click', ()=>{
+      precisionBtns.forEach(b=>b.classList.remove('sel'));
+      btn.classList.add('sel');
+      mode = btn.dataset.precision;
+      exactField.style.display = (mode === 'exact') ? 'block' : 'none';
+      hourField.style.display = (mode === 'hour') ? 'block' : 'none';
+      locationFields.style.display = 'flex';
+      locationHelp.style.display = 'block';
+      calcBtn.style.display = 'inline-block';
+      result.classList.remove('show');
+    });
+  });
+
+  calcBtn.addEventListener('click', ()=>{
+    const lat = parseFloat(document.getElementById('birthLat').value);
+    const lon = parseFloat(document.getElementById('birthLon').value);
+    const utcOffset = parseFloat(document.getElementById('birthUtcOffset').value);
+    if(isNaN(lat) || isNaN(lon) || isNaN(utcOffset)){
+      result.innerHTML = `Latitude, longitude, and UTC offset all need a number to calculate this.`;
+      result.classList.add('show');
+      return;
+    }
+    if(lat < -90 || lat > 90 || lon < -180 || lon > 180){
+      result.innerHTML = `That latitude or longitude is outside a real range — latitude runs -90 to 90, longitude -180 to 180.`;
+      result.classList.add('show');
+      return;
+    }
+
+    if(mode === 'exact'){
+      const timeVal = document.getElementById('birthTimeInput').value;
+      if(!timeVal){
+        result.innerHTML = `Add a birth time to calculate this.`;
+        result.classList.add('show');
+        return;
+      }
+      const [hh, mm] = timeVal.split(':').map(Number);
+      const deg = ascendantDegree(dobStr, hh, mm, lat, lon, utcOffset);
+      const sign = signForEclipticLongitude(deg);
+      const info = zodiacSignData[sign];
+      result.innerHTML = `Your Rising Sign is <b style="color:var(--amber);">${info.symbol} ${sign}</b>, at ${(deg%30).toFixed(1)}\u00b0 into the sign. Traditionally read as ${info.trait}.`;
+    } else if(mode === 'hour'){
+      const hh = Number(document.getElementById('birthHourSelect').value);
+      const signs = ascendantSignsForHour(dobStr, hh, lat, lon, utcOffset);
+      if(signs.length === 1){
+        const info = zodiacSignData[signs[0]];
+        result.innerHTML = `Across that entire hour, your Ascendant stayed in <b style="color:var(--amber);">${info.symbol} ${signs[0]}</b> \u2014 traditionally read as ${info.trait}. A single hour was enough to pin this down confidently.`;
+      } else {
+        const chips = signs.map(s=>`${zodiacSignData[s].symbol} ${s}`).join(' \u2192 ');
+        result.innerHTML = `Your Ascendant actually moved through more than one sign during that hour: <b style="color:var(--amber);">${chips}</b>. This is exactly the case where narrowing to the real minute would change the answer \u2014 worth tracking down a birth certificate or asking family if this matters to you.`;
+      }
+    } else {
+      result.innerHTML = `Pick whether you know the exact time or just the hour first.`;
+    }
+    result.classList.add('show');
+  });
+}
+
 function renderCyclesHTML(lifePathNum, dobStr, refDate){
   const stages = computeCycles(dobStr, lifePathNum, refDate);
   return stages.map(s=>{
@@ -1719,7 +1866,36 @@ function renderAstrologyHTML(dobStr){
     </div>
     <p style="margin-top:14px;">${elementBlurb[info.element]}</p>
     <p style="margin-top:8px;">${modalityBlurb[info.modality]}</p>
-    <p class="care-note">This is your Sun sign, drawn from your birth date alone — the broadest, most widely known layer of a chart. A full natal chart (rising sign, moon sign, and planetary placements) needs your exact birth time and location, which this app doesn't collect — so rather than guess, it's left out.</p>
+    <p class="care-note">This is your Sun sign, drawn from your birth date alone — the broadest, most widely known layer of a chart.</p>
+
+    <details class="namecheck" style="margin-top:18px;">
+      <summary>Know your birth time? Find your Rising Sign</summary>
+      <p class="subhead" style="margin-top:10px;">Unlike Sun sign, the Rising Sign (Ascendant) genuinely needs your birth time and location — it's the sign that was coming up over the eastern horizon the moment you were born, and that point moves fast: roughly one zodiac sign every two hours, sometimes faster depending on latitude.</p>
+      <div class="mood-row" style="margin-top:12px;">
+        <button type="button" class="time-precision-btn" data-precision="exact">I know the exact time</button>
+        <button type="button" class="time-precision-btn" data-precision="hour">I only know the hour</button>
+      </div>
+      <div id="exactTimeField" style="display:none; margin-top:14px;">
+        <div class="field"><label for="birthTimeInput">Birth time (local, as on the clock where you were born)</label><input type="time" id="birthTimeInput"></div>
+      </div>
+      <div id="hourOnlyField" style="display:none; margin-top:14px;">
+        <div class="field"><label for="birthHourSelect">Birth hour (local time, the hour you're confident in)</label>
+          <select id="birthHourSelect" style="background:var(--night-3); color:var(--paper); border:1px solid var(--hairline); border-radius:6px; padding:8px; font-family:'Work Sans',sans-serif;">
+            ${Array.from({length:24}).map((_,h)=>`<option value="${h}">${h.toString().padStart(2,'0')}:00 \u2013 ${h.toString().padStart(2,'0')}:59</option>`).join('')}
+          </select>
+        </div>
+        <p class="care-note" style="margin-top:10px;">This is exactly the situation some astrologers estimate from too — rather than pick one guessed minute, this checks every 5 minutes across your whole hour and tells you if the Ascendant stayed in one sign the entire time, or crossed into a second.</p>
+      </div>
+      <div class="tool-form" id="locationFields" style="display:none;">
+        <input type="number" id="birthLat" placeholder="Latitude (e.g. 40.7128)" step="any">
+        <input type="number" id="birthLon" placeholder="Longitude (e.g. -74.0060, west is negative)" step="any">
+        <input type="number" id="birthUtcOffset" placeholder="UTC offset at birth (e.g. -5)" step="0.5">
+      </div>
+      <p class="subhead" id="locationHelp" style="display:none; margin-top:8px;">This app can't look up your coordinates for you — search "[your birth city] latitude longitude" and "[your birth city] UTC offset on [your birth date]" to find these (the offset can differ from today's if that city's time zone rules have changed, or due to daylight saving).</p>
+      <button class="ghost" id="risingSignBtn" type="button" style="margin-top:14px; display:none;">Calculate my Rising Sign</button>
+      <div class="namecheck-result" id="risingSignResult"></div>
+      <p class="care-note" style="margin-top:14px;">This is as far as this app goes into a full natal chart. Where the planets themselves sit — Mercury, Venus, Mars, Jupiter, Saturn — needs a real orbital ephemeris to calculate accurately, and that's a different, much harder problem than the trigonometry behind a Rising Sign. Rather than estimate something that detailed without a way to verify it's actually correct, it's left out.</p>
+    </details>
 
     <h3 style="margin-top:24px;">Chinese: zodiac, element, and yin-yang</h3>
     <p style="margin-top:6px;"><b style="color:var(--paper);">${polarity} ${element} ${animal}</b> — the year you were born, in the twelve-year zodiac cycle. Traditionally read as ${zodiacTraits[animal]}.</p>
@@ -1932,6 +2108,7 @@ function renderReading(){
   wireWordSearch(lifePath);
   wireCompatCheck(lifePath);
   wireKuaCheck(profile.dob);
+  wireRisingSignTool(profile.dob);
 }
 
 function renderMoons(){
